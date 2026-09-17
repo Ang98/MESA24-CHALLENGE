@@ -1,0 +1,10 @@
+# Entorno virtual
+.venv/
+
+# Base de SQLite local
+*.db
+*.db-journal
+
+# Cache de Python y pytest
+__pycache__/
+.pytest_cache/
