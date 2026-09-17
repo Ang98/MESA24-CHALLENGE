@@ -2,7 +2,7 @@
 
 Prueba tecnica: FastAPI + SQLAlchemy 2.x + SQLite. El diseno de dominio esta en la nota tecnica (enviada aparte).
 
-**Requisitos:** Python 3.10+.
+**Requisitos:** Python 3.10+. Para levantar todo con Docker, ver el README de la raiz (`make up`).
 
 ## Levantar en 5 minutos
 
@@ -52,6 +52,9 @@ La IP real nunca se toma del primer valor de `X-Forwarded-For` (lo puede poner e
 `TRUSTED_PROXY_HOPS = N > 0` se toma el elemento N-esimo **desde la derecha** de esa cabecera
 (`parts[-N]`); si hay menos de N elementos o no hay cabecera, se usa `request.client.host`.
 Con `N = 0` (default) se usa directamente `request.client.host`.
+
+Con Docker (`docker-compose.yml` en la raiz) el valor es `1`: nginx queda delante y agrega la IP que
+ve al final de la cabecera; el backend no publica su puerto, asi que nadie puede saltarse nginx.
 
 En despliegue (Cloud Run, nota tecnica seccion 7): detras de Cloud Run directo, `1`; detras de un
 balanceador externo de Google delante de Cloud Run, `2`. Verificarlo en el entorno real antes de confiar

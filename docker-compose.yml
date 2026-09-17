@@ -1,0 +1,31 @@
+name: mesa247
+
+services:
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: sqlite:////data/mesa.db
+      # nginx (frontend) queda delante: la IP real es el último valor de
+      # X-Forwarded-For. Si se agrega otro proxy delante (p. ej. un
+      # balanceador), sumar uno por cada proxy.
+      TRUSTED_PROXY_HOPS: "1"
+      # Dirección con la que el comensal abre la app: la usa "Recuperar turno".
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:${WEB_PORT:-8080}}
+      CORS_ORIGINS: ${PUBLIC_BASE_URL:-http://localhost:${WEB_PORT:-8080}}
+    volumes:
+      - db-data:/data
+    # Sin puertos publicados: solo se llega a través de nginx. Si el backend
+    # quedara expuesto, un cliente podría escribir X-Forwarded-For a mano.
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  db-data:

@@ -2,7 +2,8 @@
 
 Prueba técnica: React 18 + TypeScript + Vite. Consume la API en `backend/` (FastAPI).
 
-**Requisitos:** Node 20+.
+**Requisitos:** Node 20+. Para levantar todo con Docker, ver el README de la raíz (`make up`): ahí el
+build se sirve con nginx (`nginx.conf`), que pasa `/api` al backend en el mismo origen.
 
 ## Levantar en 5 minutos
 
