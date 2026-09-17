@@ -49,7 +49,7 @@ Copiar `.env.example` a `.env` para personalizarla.
    ```
 3. **Comensal**: abrir `http://localhost:5173/l/demo-lima`, llenar el formulario (nombre,
    teléfono, cuántos son, aceptar el consentimiento) y unirse. Queda en `/t/{token}`, viendo su
-   tiempo de espera y puesto (del 3° en adelante).
+   tiempo de espera y su puesto en la cola.
 4. **Tablet**: abrir `http://localhost:5173/tablet` y pegar uno de los tokens que imprime
    `python -m scripts.seed` para "Demo Lima" (cada puerta tiene el suyo). Desde ahí se puede
    Llamar / Sentar / No vino / Quitar / Recuperar turno.

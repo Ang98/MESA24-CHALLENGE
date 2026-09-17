@@ -36,7 +36,5 @@ def position_and_wait(
 
     ahead = groups_ahead(db, entry)
     position = ahead + 1
-    if position > 3:
-        position = None
     wait_min = [ahead * minutes_per_party, (ahead + 1) * minutes_per_party]
     return ahead, position, wait_min

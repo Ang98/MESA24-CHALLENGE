@@ -246,11 +246,11 @@ function WaitingView({
 
   const progress = hasWait ? computeProgress(entry, maxAheadRef.current) : 0.04
 
-  // Con puesto (del 3er lugar en adelante): el puesto es lo grande y el
-  // tiempo pasa a un tamaño mediano debajo; la pastilla "Tu puesto: N" que
-  // habia antes desaparece (el numero grande ya la reemplaza visualmente),
-  // pero el texto exacto sigue existiendo oculto para lectores de pantalla y
-  // para los tests que buscan "Tu puesto: N".
+  // El puesto es lo grande de la pantalla y el tiempo estimado va debajo, mas
+  // chico: el puesto es un hecho (los de adelante nunca aumentan) y el tiempo
+  // es lo que puede fallar. El backend lo manda siempre mientras la entrada
+  // este en waiting; el chequeo de null solo cubre el resto de estados. El
+  // texto "Tu puesto: N" queda oculto para lectores de pantalla.
   const hasPosition = entry.position !== null
 
   const timeBlock = hasWait ? (

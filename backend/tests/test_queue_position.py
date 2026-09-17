@@ -40,7 +40,7 @@ def test_groups_ahead_never_increases_and_position_wait_min_match_formula(env):
 
     history = [_groups_ahead(env.client, target_token)]
     assert history[0]["groups_ahead"] == 5
-    assert history[0]["position"] is None  # 5 + 1 = 6 > 3
+    assert history[0]["position"] == 6  # 5 delante + 1
     assert history[0]["wait_min"] == [5 * m, 6 * m]
 
     # Cada accion aparece al menos una vez; el orden y las filas son aleatorios
@@ -68,7 +68,7 @@ def test_groups_ahead_never_increases_and_position_wait_min_match_formula(env):
 
     for h in history:
         ahead = h["groups_ahead"]
-        assert h["position"] == (None if ahead >= 3 else ahead + 1)
+        assert h["position"] == ahead + 1
         assert h["wait_min"] == [ahead * m, (ahead + 1) * m]
 
 

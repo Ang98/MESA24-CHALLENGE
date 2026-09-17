@@ -7,7 +7,7 @@ import { installFetchMock, type MockRoute } from '../testSupport/mockFetch'
 import type { EntryStatus } from '../api/types'
 
 // Pantalla del turno del comensal (NOTA_TECNICA.md, seccion 2 y 3): tiempo de
-// espera como rango, puesto solo del 3er lugar en adelante, "Voy en camino"
+// espera como rango, puesto siempre visible, "Voy en camino"
 // como evento y no como estado, y el turno guardado en localStorage bajo el
 // slug del local.
 
@@ -55,14 +55,15 @@ beforeEach(() => {
 })
 
 describe('TurnPage: waiting', () => {
-  it('muestra el puesto cuando position no es null', async () => {
-    installFetchMock([entryRoute([{ status: 200, body: entryFixture({ status: 'waiting', position: 3 }) }])])
+  it('muestra el puesto tambien cuando esta lejos en la cola', async () => {
+    installFetchMock([entryRoute([{ status: 200, body: entryFixture({ status: 'waiting', position: 20, groups_ahead: 19, wait_min: [228, 240] }) }])])
     renderTurnPage()
 
-    await screen.findByText('Tu puesto: 3')
+    await screen.findByText('Tu puesto: 20')
+    await screen.findByText('Estás en el puesto')
   })
 
-  it('no muestra puesto cuando position es null', async () => {
+  it('sin puesto (estados que no son waiting) no se rompe', async () => {
     installFetchMock([entryRoute([{ status: 200, body: entryFixture({ status: 'waiting', position: null }) }])])
     renderTurnPage()
 
@@ -387,9 +388,9 @@ describe('TurnPage: aviso de SMS en espera', () => {
   })
 })
 
-// Con puesto (position, del 3er lugar en adelante segun la nota tecnica), el
-// numero de puesto pasa a ser lo grande de la pantalla y el tiempo estimado
-// queda debajo, mas chico; sin puesto, el tiempo sigue siendo lo grande.
+// El numero de puesto es lo grande de la pantalla y el tiempo estimado queda
+// debajo, mas chico (NOTA_TECNICA.md seccion 2); si no hay puesto, el tiempo
+// vuelve a ser lo grande.
 describe('TurnPage: jerarquia visual puesto vs. tiempo', () => {
   it('con position no nulo, el puesto es lo primero y el tiempo estimado va debajo', async () => {
     installFetchMock([
