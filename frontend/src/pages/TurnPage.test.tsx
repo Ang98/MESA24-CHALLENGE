@@ -249,13 +249,6 @@ describe('TurnPage: errores', () => {
     await screen.findByText('No encontramos este turno')
   })
 
-  it('sms_supported false muestra el aviso de mantener la pantalla abierta', async () => {
-    installFetchMock([entryRoute([{ status: 200, body: entryFixture({ status: 'waiting', sms_supported: false }) }])])
-    renderTurnPage()
-
-    await screen.findByText('No te llegará SMS. Mantén esta pantalla abierta.')
-  })
-
   it('un error de red durante el sondeo muestra "Sin conexión · última actualización"', async () => {
     installFetchMock([
       entryRoute([
@@ -351,5 +344,79 @@ describe('TurnPage: una accion en curso gana sobre un sondeo atrasado', () => {
 
     resolveCancel?.(new Response(JSON.stringify(entryFixture({ status: 'cancelled' })), { status: 200 }))
     await screen.findByText('Cancelaste tu turno')
+  })
+})
+
+// El aviso de SMS solo tiene sentido mientras se espera (NOTA_TECNICA.md,
+// seccion 7: "nunca se envia SMS al unirse, solo al llamar"): una vez
+// llamado o en un estado final, ni el aviso de SMS ni el de "sin mensaje"
+// aportan nada.
+describe('TurnPage: aviso de SMS en espera', () => {
+  it('sms_supported=true muestra el aviso de SMS y no el de "sin mensaje"', async () => {
+    installFetchMock([entryRoute([{ status: 200, body: entryFixture({ status: 'waiting', sms_supported: true }) }])])
+    renderTurnPage()
+
+    await screen.findByText('Te avisaremos por SMS cuando tu mesa esté lista.')
+    expect(screen.queryByText('No te llegará un mensaje. Mantén esta pantalla abierta.')).not.toBeInTheDocument()
+  })
+
+  it('sms_supported=false muestra el aviso de "sin mensaje" y no el de SMS', async () => {
+    installFetchMock([entryRoute([{ status: 200, body: entryFixture({ status: 'waiting', sms_supported: false }) }])])
+    renderTurnPage()
+
+    await screen.findByText('No te llegará un mensaje. Mantén esta pantalla abierta.')
+    expect(screen.queryByText('Te avisaremos por SMS cuando tu mesa esté lista.')).not.toBeInTheDocument()
+  })
+
+  it('en "called" no aparece ninguno de los dos avisos', async () => {
+    installFetchMock([entryRoute([{ status: 200, body: entryFixture({ status: 'called', sms_supported: false }) }])])
+    renderTurnPage()
+
+    await screen.findByText('¡Es tu turno!')
+    expect(screen.queryByText('Te avisaremos por SMS cuando tu mesa esté lista.')).not.toBeInTheDocument()
+    expect(screen.queryByText('No te llegará un mensaje. Mantén esta pantalla abierta.')).not.toBeInTheDocument()
+  })
+
+  it('en un estado final no aparece ninguno de los dos avisos', async () => {
+    installFetchMock([entryRoute([{ status: 200, body: entryFixture({ status: 'seated', sms_supported: false }) }])])
+    renderTurnPage()
+
+    await screen.findByText('¡Buen provecho!')
+    expect(screen.queryByText('Te avisaremos por SMS cuando tu mesa esté lista.')).not.toBeInTheDocument()
+    expect(screen.queryByText('No te llegará un mensaje. Mantén esta pantalla abierta.')).not.toBeInTheDocument()
+  })
+})
+
+// Con puesto (position, del 3er lugar en adelante segun la nota tecnica), el
+// numero de puesto pasa a ser lo grande de la pantalla y el tiempo estimado
+// queda debajo, mas chico; sin puesto, el tiempo sigue siendo lo grande.
+describe('TurnPage: jerarquia visual puesto vs. tiempo', () => {
+  it('con position no nulo, el puesto es lo primero y el tiempo estimado va debajo', async () => {
+    installFetchMock([
+      entryRoute([
+        { status: 200, body: entryFixture({ status: 'waiting', position: 2, groups_ahead: 2, wait_min: [24, 36] }) },
+      ]),
+    ])
+    const { container } = renderTurnPage()
+
+    await screen.findByText('Estás en el puesto')
+    await screen.findByText('Tiempo estimado')
+    await screen.findByText('Tu puesto: 2')
+    await screen.findByText('Entre 24 y 36 min')
+
+    const text = container.textContent ?? ''
+    expect(text.indexOf('Estás en el puesto')).toBeLessThan(text.indexOf('Tiempo estimado'))
+  })
+
+  it('con position null, no aparece "Estás en el puesto" y el tiempo sigue mostrandose', async () => {
+    installFetchMock([
+      entryRoute([
+        { status: 200, body: entryFixture({ status: 'waiting', position: null, groups_ahead: 2, wait_min: [24, 36] }) },
+      ]),
+    ])
+    renderTurnPage()
+
+    await screen.findByText('Tiempo estimado')
+    expect(screen.queryByText('Estás en el puesto')).not.toBeInTheDocument()
   })
 })

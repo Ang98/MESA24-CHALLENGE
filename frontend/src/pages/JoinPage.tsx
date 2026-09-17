@@ -20,7 +20,8 @@ interface FieldErrors {
   consent?: string
 }
 
-const PARTY_SIZE_OPTIONS = Array.from({ length: 20 }, (_, i) => i + 1)
+const MIN_PARTY_SIZE = 1
+const MAX_PARTY_SIZE = 20
 
 export function JoinPage() {
   const { slug = '' } = useParams<{ slug: string }>()
@@ -91,6 +92,14 @@ export function JoinPage() {
     setReloadKey((key) => key + 1)
   }
 
+  function handlePartySizeDecrement(): void {
+    setPartySize((n) => Math.max(MIN_PARTY_SIZE, n - 1))
+  }
+
+  function handlePartySizeIncrement(): void {
+    setPartySize((n) => Math.min(MAX_PARTY_SIZE, n + 1))
+  }
+
   function validate(): boolean {
     const nextErrors: FieldErrors = {}
     const trimmedName = name.trim()
@@ -151,61 +160,115 @@ export function JoinPage() {
   }
 
   if (loadState.kind === 'loading' || checkingExisting) {
-    return <p>Cargando…</p>
+    return (
+      <div className="app-shell">
+        <main className="card state-card">
+          <p className="state-message">Cargando…</p>
+        </main>
+      </div>
+    )
   }
 
   if (loadState.kind === 'not_found') {
-    return <p>No encontramos este local</p>
+    return (
+      <div className="app-shell">
+        <main className="card state-card">
+          <p className="state-message">No encontramos este local</p>
+        </main>
+      </div>
+    )
   }
 
   if (loadState.kind === 'error') {
     return (
-      <main>
-        <p className="form-error">Sin conexión. Vuelve a intentarlo.</p>
-        <button type="button" onClick={handleRetryLoad}>
-          Reintentar
-        </button>
-      </main>
+      <div className="app-shell">
+        <main className="card state-card">
+          <p className="callout form-error">Sin conexión. Vuelve a intentarlo.</p>
+          <button type="button" className="btn btn-ghost" onClick={handleRetryLoad}>
+            Reintentar
+          </button>
+        </main>
+      </div>
     )
   }
 
   return (
-    <main className="join-page">
-      <h1>{loadState.location.name}</h1>
-      <form onSubmit={handleSubmit} noValidate>
-        <label htmlFor="name">Nombre</label>
-        <input id="name" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} />
-        {errors.name ? <p className="field-error">{errors.name}</p> : null}
+    <div className="app-shell">
+      <main className="card join-page">
+        <div className="card-notch" aria-hidden="true" />
+        <header className="card-header">
+          <h1>{loadState.location.name}</h1>
+          <p className="sub">Lista de espera · hoy</p>
+        </header>
 
-        <PhoneInput
-          country={country}
-          rawValue={phoneRaw}
-          onCountryChange={setCountry}
-          onRawValueChange={setPhoneRaw}
-          error={errors.phone}
-        />
+        <form onSubmit={handleSubmit} noValidate className="form">
+          <div className="field">
+            <label htmlFor="name" className="field-label">
+              Nombre
+            </label>
+            <input
+              id="name"
+              className="input-text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={60}
+            />
+            {errors.name ? <p className="field-error">{errors.name}</p> : null}
+          </div>
 
-        <label htmlFor="party-size">Cuántos son</label>
-        <select id="party-size" value={partySize} onChange={(e) => setPartySize(Number(e.target.value))}>
-          {PARTY_SIZE_OPTIONS.map((n) => (
-            <option key={n} value={n}>
-              {n}
-            </option>
-          ))}
-        </select>
+          <PhoneInput
+            country={country}
+            rawValue={phoneRaw}
+            onCountryChange={setCountry}
+            onRawValueChange={setPhoneRaw}
+            error={errors.phone}
+          />
 
-        <label className="consent">
-          <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
-          Acepto que se use mi nombre y teléfono solo para avisarme de mi turno. Se eliminan a los 30 días.
-        </label>
-        {errors.consent ? <p className="field-error">{errors.consent}</p> : null}
+          <div className="field">
+            <span id="party-size-label" className="field-label">
+              Cuántos son
+            </span>
+            <div className="stepper" role="group" aria-labelledby="party-size-label">
+              <button
+                type="button"
+                className="stepper-btn"
+                onClick={handlePartySizeDecrement}
+                disabled={partySize <= MIN_PARTY_SIZE}
+                aria-label="Quitar una persona"
+              >
+                −
+              </button>
+              <span className="stepper-value" aria-live="polite">
+                {partySize}
+              </span>
+              <button
+                type="button"
+                className="stepper-btn"
+                onClick={handlePartySizeIncrement}
+                disabled={partySize >= MAX_PARTY_SIZE}
+                aria-label="Agregar una persona"
+              >
+                +
+              </button>
+            </div>
+          </div>
 
-        {formError ? <p className="form-error">{formError}</p> : null}
+          <div className="field">
+            <label className="consent">
+              <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
+              <span>Usaremos tu nombre y celular solo para avisarte de tu turno.</span>
+            </label>
+            <p className="consent-fine-print">Tus datos se borran a los 30 días.</p>
+            {errors.consent ? <p className="field-error">{errors.consent}</p> : null}
+          </div>
 
-        <button type="submit" disabled={submitting}>
-          {submitting ? 'Enviando…' : 'Unirme a la cola'}
-        </button>
-      </form>
-    </main>
+          {formError ? <p className="callout form-error">{formError}</p> : null}
+
+          <button type="submit" className="btn btn-primary" disabled={submitting}>
+            {submitting ? 'Enviando…' : 'Unirme a la cola'}
+          </button>
+        </form>
+      </main>
+    </div>
   )
 }

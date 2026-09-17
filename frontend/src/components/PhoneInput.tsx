@@ -22,29 +22,40 @@ export function PhoneInput({ country, rawValue, onCountryChange, onRawValueChang
 
   return (
     <div className="phone-input">
-      <label htmlFor="phone-country">País</label>
-      <select id="phone-country" value={country} onChange={handleCountryChange}>
-        {COUNTRIES.map((c) => (
-          <option key={c.code} value={c.code}>
-            {c.label}
-          </option>
-        ))}
-      </select>
+      <span className="field-label">Teléfono</span>
+      <div className="phone-input-row">
+        <div className="phone-input-country">
+          <label htmlFor="phone-country" className="field-label">
+            País
+          </label>
+          <select id="phone-country" value={country} onChange={handleCountryChange}>
+            {COUNTRIES.map((c) => (
+              <option key={c.code} value={c.code}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+        </div>
 
-      <label htmlFor="phone-number">Celular</label>
-      <input
-        id="phone-number"
-        type="tel"
-        inputMode="tel"
-        autoComplete={isOther ? 'tel' : 'tel-national'}
-        placeholder={isOther ? '+34 612 345 678' : '9XXXXXXXX'}
-        value={rawValue}
-        onChange={handleValueChange}
-        aria-invalid={error !== undefined}
-      />
+        <div className="phone-input-number">
+          <label htmlFor="phone-number" className="field-label">
+            Celular
+          </label>
+          <input
+            id="phone-number"
+            type="tel"
+            inputMode="tel"
+            autoComplete={isOther ? 'tel' : 'tel-national'}
+            placeholder={isOther ? '+34 612 345 678' : '9XXXXXXXX'}
+            value={rawValue}
+            onChange={handleValueChange}
+            aria-invalid={error !== undefined}
+          />
+        </div>
+      </div>
 
-      {isOther ? <p className="notice">{OTHER_COUNTRY_NOTICE}</p> : null}
       {error ? <p className="field-error">{error}</p> : null}
+      {isOther ? <p className="callout warn">{OTHER_COUNTRY_NOTICE}</p> : null}
     </div>
   )
 }

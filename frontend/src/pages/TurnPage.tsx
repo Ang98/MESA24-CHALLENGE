@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import { cancelEntry, getEntry, onMyWay } from '../api/public'
-import type { EntryPublic } from '../api/types'
+import type { EntryPublic, EntryStatus } from '../api/types'
 import { TURN_POLL_INTERVAL_MS, usePolling } from '../lib/usePolling'
 import { clearTurnToken, clearTurnTokenIfMatches, getTurnToken, setTurnToken } from '../lib/storage'
 import { waitText } from '../lib/waitText'
@@ -12,6 +12,43 @@ const FINAL_MESSAGES: Record<string, string> = {
   cancelled: 'Cancelaste tu turno',
   no_show: 'Tu turno se cerró porque no llegaste',
   removed: 'El local quitó tu turno de la cola',
+}
+
+// Iconos puramente decorativos por estado final (no hay ninguno en el prototipo
+// para estos casos): un cierre sobrio, sin depender de una libreria de iconos.
+const FINAL_ICONS: Record<string, string> = {
+  seated: '✓',
+  cancelled: '✕',
+  no_show: '○',
+  removed: '↩',
+}
+
+/**
+ * Progreso presentacional de la barra de espera (0..1). No agrega estado de
+ * negocio nuevo: se deriva en cada render de `wait_min` / `groups_ahead` /
+ * `joined_at`, que ya vienen del backend (nota tecnica seccion 3).
+ *
+ * Combina dos señales y se queda con la mayor: el tiempo transcurrido (que al
+ * unirse recien es casi 0) y el avance de puesto (`maxAhead`, el mayor
+ * `groups_ahead` visto en esta pantalla). Asi, cuando alguien que estaba
+ * adelante sale de la cola, la barra salta de inmediato aunque acabes de
+ * unirte.
+ */
+function computeProgress(entry: EntryPublic, maxAhead: number): number {
+  if (entry.wait_min === null || entry.groups_ahead === null) return 0.04
+
+  const elapsedMin = Math.max(0, (Date.now() - new Date(entry.joined_at).getTime()) / 60_000)
+  const remainingMin = (entry.wait_min[0] + entry.wait_min[1]) / 2
+  const total = elapsedMin + remainingMin
+  const progressByTime = total > 0 ? elapsedMin / total : 0.04
+
+  const progressByPosition = (maxAhead - entry.groups_ahead + 1) / (maxAhead + 1)
+
+  let progress = Math.max(progressByTime, progressByPosition)
+  if (entry.groups_ahead === 0) {
+    progress = Math.max(progress, 0.85)
+  }
+  return Math.min(0.96, Math.max(0.04, progress))
 }
 
 export function TurnPage() {
@@ -134,11 +171,23 @@ export function TurnPage() {
   }
 
   if (notFound) {
-    return <p>No encontramos este turno</p>
+    return (
+      <div className="app-shell">
+        <main className="card state-card">
+          <p className="state-message">No encontramos este turno</p>
+        </main>
+      </div>
+    )
   }
 
   if (!entry) {
-    return <p>Cargando…</p>
+    return (
+      <div className="app-shell">
+        <main className="card state-card">
+          <p className="state-message">Cargando…</p>
+        </main>
+      </div>
+    )
   }
 
   const formattedTime = lastUpdated
@@ -148,35 +197,28 @@ export function TurnPage() {
   const finalMessage = FINAL_MESSAGES[entry.status]
 
   return (
-    <main className="turn-page">
-      <h1>{entry.location.name}</h1>
-      <dl className="turn-details">
-        <dt>Nombre</dt>
-        <dd>{entry.name}</dd>
-        <dt>Personas</dt>
-        <dd>{entry.party_size}</dd>
-        <dt>Teléfono</dt>
-        <dd>{entry.phone}</dd>
-      </dl>
+    <div className="app-shell">
+      <main className="card turn-page">
+        <div className="card-notch" aria-hidden="true" />
+        <header className="card-header">
+          <h1>{entry.location.name}</h1>
+        </header>
 
-      {!entry.sms_supported ? (
-        <p className="notice">No te llegará SMS. Mantén esta pantalla abierta.</p>
-      ) : null}
+        {offline ? <p className="offline-banner">Sin conexión · última actualización {formattedTime}</p> : null}
+        {changedNotice ? <p className="notice">Tu turno cambió</p> : null}
+        {actionError ? <p className="notice">{actionError}</p> : null}
 
-      {offline ? <p className="offline-banner">Sin conexión · última actualización {formattedTime}</p> : null}
-      {changedNotice ? <p className="notice">Tu turno cambió</p> : null}
-      {actionError ? <p className="notice">{actionError}</p> : null}
+        {entry.status === 'waiting' ? (
+          <WaitingView entry={entry} onCancel={handleCancel} disabled={actionPending} />
+        ) : null}
 
-      {entry.status === 'waiting' ? (
-        <WaitingView entry={entry} onCancel={handleCancel} disabled={actionPending} />
-      ) : null}
+        {entry.status === 'called' ? (
+          <CalledView entry={entry} onCancel={handleCancel} onOnMyWay={handleOnMyWay} disabled={actionPending} />
+        ) : null}
 
-      {entry.status === 'called' ? (
-        <CalledView entry={entry} onCancel={handleCancel} onOnMyWay={handleOnMyWay} disabled={actionPending} />
-      ) : null}
-
-      {finalMessage ? <FinalView message={finalMessage} slug={entry.location.slug} /> : null}
-    </main>
+        {finalMessage ? <FinalView message={finalMessage} slug={entry.location.slug} status={entry.status} /> : null}
+      </main>
+    </div>
   )
 }
 
@@ -189,17 +231,100 @@ function WaitingView({
   onCancel: () => void
   disabled: boolean
 }) {
-  return (
-    <section>
-      {entry.groups_ahead !== null && entry.wait_min !== null ? (
-        <p className="wait-time">{waitText(entry.groups_ahead, entry.wait_min)}</p>
-      ) : null}
-      {entry.position !== null ? (
-        <p key={entry.position} className="position">
-          Tu puesto: {entry.position}
+  const groupsAhead = entry.groups_ahead
+  const waitMin = entry.wait_min
+  const hasWait = groupsAhead !== null && waitMin !== null
+  const isNext = hasWait && groupsAhead === 0
+
+  // Mayor `groups_ahead` visto hasta ahora en esta pantalla (ver computeProgress).
+  // Mutar un ref durante el render es seguro aqui: solo puede crecer (Math.max),
+  // asi que es idempotente si React vuelve a renderizar (StrictMode).
+  const maxAheadRef = useRef(0)
+  if (groupsAhead !== null) {
+    maxAheadRef.current = Math.max(maxAheadRef.current, groupsAhead)
+  }
+
+  const progress = hasWait ? computeProgress(entry, maxAheadRef.current) : 0.04
+
+  // Con puesto (del 3er lugar en adelante): el puesto es lo grande y el
+  // tiempo pasa a un tamaño mediano debajo; la pastilla "Tu puesto: N" que
+  // habia antes desaparece (el numero grande ya la reemplaza visualmente),
+  // pero el texto exacto sigue existiendo oculto para lectores de pantalla y
+  // para los tests que buscan "Tu puesto: N".
+  const hasPosition = entry.position !== null
+
+  const timeBlock = hasWait ? (
+    <>
+      <p className={isNext ? 'wait-kicker accent' : 'wait-kicker'}>
+        {isNext ? 'Eres el siguiente' : 'Tiempo estimado'}
+      </p>
+      {/* Texto exacto que ya buscan los tests (waitText); version visual abajo. */}
+      <p className="sr-only">{waitText(groupsAhead, waitMin)}</p>
+      <div
+        key={isNext ? `next-${waitMin[1]}` : `range-${waitMin[0]}-${waitMin[1]}`}
+        className={hasPosition ? 'wait-medium-wrap' : 'wait-big-wrap'}
+        aria-hidden="true"
+      >
+        <p className={hasPosition ? 'wait-medium' : 'wait-big'}>
+          {isNext ? (
+            `~${waitMin[1]}`
+          ) : (
+            <>
+              {waitMin[0]}
+              <span className="wait-dash">–</span>
+              {waitMin[1]}
+            </>
+          )}
+          <span className="wait-unit">min</span>
         </p>
+      </div>
+    </>
+  ) : null
+
+  return (
+    <section className="turn-waiting">
+      {hasPosition ? (
+        <>
+          <p className="wait-kicker">Estás en el puesto</p>
+          <div key={entry.position} className="wait-big-wrap" aria-hidden="true">
+            <p className="wait-big">{entry.position}</p>
+          </div>
+          <p className="sr-only">Tu puesto: {entry.position}</p>
+          {timeBlock}
+        </>
+      ) : (
+        timeBlock
+      )}
+
+      {hasWait ? (
+        <div
+          className="progress-bar"
+          role="progressbar"
+          aria-label="Avance en la cola"
+          aria-valuenow={Math.round(progress * 100)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          <i style={{ transform: `scaleX(${progress})` }} />
+        </div>
       ) : null}
-      <button type="button" onClick={onCancel} disabled={disabled}>
+
+      {entry.sms_supported ? (
+        <p className="turn-sub">Te avisaremos por SMS cuando tu mesa esté lista.</p>
+      ) : (
+        <p className="callout warn">No te llegará un mensaje. Mantén esta pantalla abierta.</p>
+      )}
+
+      <dl className="turn-details">
+        <dt>Nombre</dt>
+        <dd>{entry.name}</dd>
+        <dt>Personas</dt>
+        <dd>{entry.party_size}</dd>
+        <dt>Teléfono</dt>
+        <dd>{entry.phone}</dd>
+      </dl>
+
+      <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={disabled}>
         Ya no voy
       </button>
     </section>
@@ -218,28 +343,38 @@ function CalledView({
   disabled: boolean
 }) {
   return (
-    <section>
+    <section className="turn-called">
       <h2>¡Es tu turno!</h2>
-      <p>Acércate a la entrada</p>
+      <p className="turn-sub-lead">Acércate a la entrada</p>
       {entry.on_my_way ? (
-        <p>Avisamos que vas en camino</p>
+        <p className="turn-confirmed">
+          <span className="check" aria-hidden="true">
+            ✓
+          </span>
+          <span>Avisamos que vas en camino</span>
+        </p>
       ) : (
-        <button type="button" onClick={onOnMyWay} disabled={disabled}>
+        <button type="button" className="btn btn-on-accent" onClick={onOnMyWay} disabled={disabled}>
           Voy en camino
         </button>
       )}
-      <button type="button" onClick={onCancel} disabled={disabled}>
+      <button type="button" className="btn btn-ghost-on-accent" onClick={onCancel} disabled={disabled}>
         Ya no voy
       </button>
     </section>
   )
 }
 
-function FinalView({ message, slug }: { message: string; slug: string }) {
+function FinalView({ message, slug, status }: { message: string; slug: string; status: EntryStatus }) {
   return (
-    <section>
-      <p>{message}</p>
-      <Link to={`/l/${slug}`}>Volver a unirme</Link>
+    <section className="turn-final">
+      <p className="final-icon" aria-hidden="true">
+        {FINAL_ICONS[status] ?? '•'}
+      </p>
+      <p className="final-message">{message}</p>
+      <Link to={`/l/${slug}`} className="btn btn-primary">
+        Volver a unirme
+      </Link>
     </section>
   )
 }

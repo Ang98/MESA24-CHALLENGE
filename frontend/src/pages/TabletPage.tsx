@@ -5,11 +5,76 @@ import type { TabletQueueItem, TabletQueueResponse } from '../api/types'
 import { TABLET_POLL_INTERVAL_MS, usePolling } from '../lib/usePolling'
 import { clearTabletToken, getTabletToken, setTabletToken } from '../lib/storage'
 
+// Referencia estable para el caso "todavia no hay cola": evita que
+// `queue?.entries ?? []` cree un arreglo nuevo (y por lo tanto una dependencia
+// de efecto distinta) en cada render mientras `queue` sigue siendo null.
+const NO_ENTRIES: TabletQueueItem[] = []
+
 /** Minutos esperando = server_time - joined_at (nunca el reloj de la tablet). */
 // eslint-disable-next-line react-refresh/only-export-components -- funcion pura, exportada para poder testearla aparte.
 export function minutesWaiting(serverTime: string, joinedAt: string): number {
   const diffMs = new Date(serverTime).getTime() - new Date(joinedAt).getTime()
   return Math.max(0, Math.floor(diffMs / 60_000))
+}
+
+/**
+ * Hook de presentacion local: retiene brevemente (250ms) las filas que
+ * desaparecen de `entries` para poder animar su salida, en vez de que
+ * desaparezcan de golpe. No toca `queue` ni ningun estado de negocio.
+ *
+ * Si el navegador no soporta `matchMedia` (jsdom, en los tests) o el usuario
+ * pidio "reducir movimiento", no se retiene nada: la salida es inmediata,
+ * igual que antes de este cambio (asi `queryByText(...)` justo despues de
+ * quitar/sentar un turno sigue funcionando en los tests sin tocarlos).
+ */
+function useLeavingRows(entries: TabletQueueItem[]): TabletQueueItem[] {
+  const prevEntriesRef = useRef<TabletQueueItem[]>(entries)
+  const timersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
+  const [leaving, setLeaving] = useState<TabletQueueItem[]>([])
+
+  useEffect(() => {
+    const prevEntries = prevEntriesRef.current
+    prevEntriesRef.current = entries
+    const currentIds = new Set(entries.map((e) => e.id))
+    const removed = prevEntries.filter((e) => !currentIds.has(e.id))
+
+    // Si un id que estaba "saliendo" reaparecio (poco probable), se saca de la
+    // lista de salida. Si no cambia nada, se devuelve la misma referencia:
+    // `entries` puede llegar como un arreglo nuevo en cada render (p. ej.
+    // `queue?.entries ?? []` mientras `queue` es null) y sin este chequeo el
+    // efecto dispararia un setState -> render -> efecto sin fin.
+    setLeaving((prev) => {
+      const next = prev.filter((row) => !currentIds.has(row.id))
+      return next.length === prev.length ? prev : next
+    })
+
+    if (removed.length === 0) return
+
+    const canAnimate = window.matchMedia?.('(prefers-reduced-motion: no-preference)')?.matches === true
+    if (!canAnimate) return
+
+    setLeaving((prev) => [...prev.filter((row) => !removed.some((r) => r.id === row.id)), ...removed])
+
+    for (const row of removed) {
+      const existingTimer = timersRef.current.get(row.id)
+      if (existingTimer) clearTimeout(existingTimer)
+      const timer = setTimeout(() => {
+        setLeaving((prev) => prev.filter((r) => r.id !== row.id))
+        timersRef.current.delete(row.id)
+      }, 250)
+      timersRef.current.set(row.id, timer)
+    }
+  }, [entries])
+
+  useEffect(() => {
+    const timers = timersRef.current
+    return () => {
+      timers.forEach((timer) => clearTimeout(timer))
+      timers.clear()
+    }
+  }, [])
+
+  return leaving
 }
 
 export function TabletPage() {
@@ -193,31 +258,45 @@ export function TabletPage() {
     return <TokenForm onSave={handleSaveToken} error={tokenError} />
   }
 
+  // Presentacion: dia de la semana y conteos de la cola, derivados de datos que ya hay.
+  const weekday = new Date().toLocaleDateString('es-PE', { weekday: 'long' })
+  const waitingCount = queue?.entries.filter((e) => e.status === 'waiting').length ?? 0
+  const calledCount = queue?.entries.filter((e) => e.status === 'called').length ?? 0
+
   return (
-    <main className="tablet-page">
-      <header className="tablet-header">
-        <h1>{queue?.location.name ?? 'Cola'}</h1>
-        <button type="button" className="ghost" onClick={handleChangeToken}>
-          Cambiar token
-        </button>
-      </header>
+    <div className="tablet-shell">
+      <main className="tablet-frame tablet-page">
+        <header className="tablet-header">
+          <h1>
+            {queue?.location.name ?? 'Cola'} <span className="tablet-heading-day">· {weekday}</span>
+          </h1>
+          <div className="tablet-header-right">
+            <p className="tablet-counts">
+              {waitingCount} en cola · {calledCount} llamados
+            </p>
+            <button type="button" className="link-ghost" onClick={handleChangeToken}>
+              Cambiar token
+            </button>
+          </div>
+        </header>
 
-      {offline ? <OfflineBanner lastUpdated={lastUpdated} /> : null}
-      {rowNotice ? <p className="notice">{rowNotice}</p> : null}
+        {offline ? <OfflineBanner lastUpdated={lastUpdated} /> : null}
+        {rowNotice ? <p className="notice">{rowNotice}</p> : null}
 
-      <QueueList
-        queue={queue}
-        disabled={offline}
-        pendingRowIds={pendingRowIds}
-        onCall={(id) => void runAction(id, callEntry)}
-        onSeat={(id) => void runAction(id, seatEntry)}
-        onNoShow={(id) => void runAction(id, noShowEntry)}
-        onRemove={(id) => void runAction(id, removeEntry)}
-        onRecoverLink={(id) => void handleRecoverLink(id)}
-      />
+        <QueueList
+          queue={queue}
+          disabled={offline}
+          pendingRowIds={pendingRowIds}
+          onCall={(id) => void runAction(id, callEntry)}
+          onSeat={(id) => void runAction(id, seatEntry)}
+          onNoShow={(id) => void runAction(id, noShowEntry)}
+          onRemove={(id) => void runAction(id, removeEntry)}
+          onRecoverLink={(id) => void handleRecoverLink(id)}
+        />
 
-      {recoverUrl ? <RecoverLinkDialog url={recoverUrl} onClose={() => setRecoverUrl(null)} /> : null}
-    </main>
+        {recoverUrl ? <RecoverLinkDialog url={recoverUrl} onClose={() => setRecoverUrl(null)} /> : null}
+      </main>
+    </div>
   )
 }
 
@@ -233,15 +312,27 @@ function TokenForm({ onSave, error }: { onSave: (token: string) => void; error: 
   }
 
   return (
-    <main className="token-form">
-      <h1>Ingresar a la tablet</h1>
-      <form onSubmit={handleSubmit}>
-        <label htmlFor="tablet-token">Token de la tablet</label>
-        <input id="tablet-token" value={value} onChange={(e) => setValue(e.target.value)} autoComplete="off" />
-        {error ? <p className="field-error">{error}</p> : null}
-        <button type="submit">Entrar</button>
-      </form>
-    </main>
+    <div className="token-form-shell">
+      <main className="token-form-card token-form">
+        <h1>Ingresar a la tablet</h1>
+        <form onSubmit={handleSubmit}>
+          <label htmlFor="tablet-token" className="field-label">
+            Token de la tablet
+          </label>
+          <input
+            id="tablet-token"
+            className="input-text"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            autoComplete="off"
+          />
+          {error ? <p className="field-error">{error}</p> : null}
+          <button type="submit" className="btn btn-primary">
+            Entrar
+          </button>
+        </form>
+      </main>
+    </div>
   )
 }
 
@@ -262,18 +353,32 @@ interface QueueListProps {
 }
 
 function QueueList({ queue, disabled, pendingRowIds, onCall, onSeat, onNoShow, onRemove, onRecoverLink }: QueueListProps) {
+  // Los hooks no pueden ser condicionales: se llama siempre, con un arreglo
+  // vacio mientras no haya cola cargada todavia.
+  const leavingRows = useLeavingRows(queue?.entries ?? NO_ENTRIES)
+
   if (!queue) {
-    return <p>Cargando…</p>
+    return <p className="empty-state">Cargando…</p>
   }
   if (queue.entries.length === 0) {
-    return <p>Sin turnos en espera.</p>
+    return <p className="empty-state">Sin turnos en espera.</p>
   }
   return (
     <ul className="queue-list">
-      {queue.entries.map((item) => (
+      <li className="queue-row-head" aria-hidden="true">
+        <span className="row-pos">#</span>
+        <span className="name">Nombre</span>
+        <span className="party">Personas</span>
+        <span className="minutes">Espera</span>
+        <span className="tags">Estado</span>
+        <span className="phone">Teléfono</span>
+        <span className="actions">Acciones</span>
+      </li>
+      {queue.entries.map((item, index) => (
         <QueueRow
           key={item.id}
           item={item}
+          position={index + 1}
           serverTime={queue.server_time}
           disabled={disabled}
           pending={pendingRowIds.has(item.id)}
@@ -284,12 +389,18 @@ function QueueList({ queue, disabled, pendingRowIds, onCall, onSeat, onNoShow, o
           onRecoverLink={() => onRecoverLink(item.id)}
         />
       ))}
+      {leavingRows.map((row) => (
+        <li key={`leaving-${row.id}`} className="queue-row leaving" role="presentation" aria-hidden="true">
+          <span className="name">{row.name}</span>
+        </li>
+      ))}
     </ul>
   )
 }
 
 interface QueueRowProps {
   item: TabletQueueItem
+  position: number
   serverTime: string
   disabled: boolean
   pending: boolean
@@ -300,9 +411,21 @@ interface QueueRowProps {
   onRecoverLink: () => void
 }
 
-function QueueRow({ item, serverTime, disabled, pending, onCall, onSeat, onNoShow, onRemove, onRecoverLink }: QueueRowProps) {
+function QueueRow({
+  item,
+  position,
+  serverTime,
+  disabled,
+  pending,
+  onCall,
+  onSeat,
+  onNoShow,
+  onRemove,
+  onRecoverLink,
+}: QueueRowProps) {
   const minutes = minutesWaiting(serverTime, item.joined_at)
   const rowDisabled = disabled || pending
+  const isCalled = item.status === 'called'
 
   function handleRemove(): void {
     if (window.confirm('¿Quitar este turno de la cola?')) {
@@ -311,37 +434,49 @@ function QueueRow({ item, serverTime, disabled, pending, onCall, onSeat, onNoSho
   }
 
   return (
-    <li className="queue-row">
+    <li className={`queue-row${isCalled ? ' called' : ''}${pending ? ' pending' : ''}`}>
+      <span className="row-pos" aria-hidden="true">
+        {position}
+      </span>
       <span className="name">{item.name}</span>
       <span className="party">{item.party_size} pers.</span>
       <span className="minutes">{minutes} min</span>
+      <span className="tags">
+        <span className={`status-tag${isCalled ? ' status-tag--called' : ''}`}>
+          {item.status === 'waiting' ? 'En espera' : 'Llamado'}
+        </span>
+        {item.on_my_way ? <span className="tag status-tag status-tag--onway">En camino</span> : null}
+      </span>
       <span className="phone">···{item.phone_last3}</span>
-      <span className="status">{item.status === 'waiting' ? 'En espera' : 'Llamado'}</span>
-      {item.on_my_way ? <span className="tag">En camino</span> : null}
       <span className="actions">
         {item.status === 'waiting' ? (
           <>
-            <button type="button" onClick={onCall} disabled={rowDisabled}>
+            <button type="button" className="btn-mini btn-mini-primary" onClick={onCall} disabled={rowDisabled}>
               Llamar
             </button>
-            <button type="button" onClick={onSeat} disabled={rowDisabled}>
+            <button type="button" className="btn-mini btn-mini-ghost" onClick={onSeat} disabled={rowDisabled}>
               Sentar
             </button>
-            <button type="button" onClick={handleRemove} disabled={rowDisabled}>
+            <button type="button" className="btn-mini btn-mini-danger" onClick={handleRemove} disabled={rowDisabled}>
               Quitar
             </button>
           </>
         ) : (
           <>
-            <button type="button" onClick={onSeat} disabled={rowDisabled}>
+            <button type="button" className="btn-mini btn-mini-primary" onClick={onSeat} disabled={rowDisabled}>
               Sentar
             </button>
-            <button type="button" onClick={onNoShow} disabled={rowDisabled}>
+            <button type="button" className="btn-mini btn-mini-ghost" onClick={onNoShow} disabled={rowDisabled}>
               No vino
             </button>
           </>
         )}
-        <button type="button" onClick={onRecoverLink} disabled={rowDisabled}>
+        <button
+          type="button"
+          className="btn-mini btn-mini-ghost btn-mini-quiet"
+          onClick={onRecoverLink}
+          disabled={rowDisabled}
+        >
           Recuperar turno
         </button>
       </span>
@@ -373,10 +508,10 @@ function RecoverLinkDialog({ url, onClose }: { url: string; onClose: () => void 
         <input id="recover-url" ref={inputRef} readOnly value={url} onFocus={(e) => e.target.select()} />
         {copyNotice ? <p className="notice">{copyNotice}</p> : null}
         <div className="dialog-actions">
-          <button type="button" onClick={() => void handleCopy()}>
+          <button type="button" className="btn btn-primary" onClick={() => void handleCopy()}>
             Copiar
           </button>
-          <button type="button" onClick={onClose}>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>
             Cerrar
           </button>
         </div>

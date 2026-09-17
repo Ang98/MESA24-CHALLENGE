@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
@@ -153,7 +153,7 @@ describe('JoinPage: envio y clave de idempotencia', () => {
 })
 
 describe('JoinPage: formulario', () => {
-  it('"Cuántos son" es un select de 1 a 20 y el valor elegido va en el body', async () => {
+  it('el stepper de "Cuántos son" arranca en 2, tiene limites 1-20, y el valor elegido va en el body', async () => {
     const { calls } = installFetchMock([
       LOCATION_ROUTE,
       joinRoute([{ status: 201, body: entryFixture({ status: 'waiting' }) }]),
@@ -162,19 +162,54 @@ describe('JoinPage: formulario', () => {
     renderJoinPage()
 
     await screen.findByText('Demo Lima')
-    const select = screen.getByLabelText('Cuántos son') as HTMLSelectElement
-    expect(select.tagName).toBe('SELECT')
-    const values = Array.from(select.options).map((o) => o.value)
-    expect(values).toEqual(Array.from({ length: 20 }, (_, i) => String(i + 1)))
+    const group = screen.getByRole('group', { name: 'Cuántos son' })
+    const decrement = within(group).getByRole('button', { name: 'Quitar una persona' })
+    const increment = within(group).getByRole('button', { name: 'Agregar una persona' })
+
+    expect(within(group).getByText('2')).toBeInTheDocument()
+    expect(decrement).not.toBeDisabled()
+    expect(increment).not.toBeDisabled()
+
+    // "-" baja hasta 1 y ahi queda desactivado; no baja mas alla
+    await user.click(decrement)
+    expect(within(group).getByText('1')).toBeInTheDocument()
+    expect(decrement).toBeDisabled()
+    await user.click(decrement)
+    expect(within(group).getByText('1')).toBeInTheDocument()
+
+    // "+" sube hasta 20 y ahi queda desactivado; no sube mas alla
+    for (let i = 0; i < 19; i += 1) {
+      await user.click(increment)
+    }
+    expect(within(group).getByText('20')).toBeInTheDocument()
+    expect(increment).toBeDisabled()
+    await user.click(increment)
+    expect(within(group).getByText('20')).toBeInTheDocument()
+
+    // baja a 5, que es el valor que se termina enviando
+    for (let i = 0; i < 15; i += 1) {
+      await user.click(decrement)
+    }
+    expect(within(group).getByText('5')).toBeInTheDocument()
 
     await fillValidForm(user)
-    await user.selectOptions(select, '5')
     await user.click(screen.getByRole('button', { name: /Unirme a la cola/i }))
 
     await screen.findByText('TurnPageStub')
     const postCall = calls.find((c) => c.method === 'POST')
     const body = JSON.parse(postCall?.body ?? '{}') as { party_size: number }
     expect(body.party_size).toBe(5)
+  })
+
+  it('muestra el texto de consentimiento y la letra chica sobre los 30 dias', async () => {
+    installFetchMock([LOCATION_ROUTE])
+    renderJoinPage()
+
+    await screen.findByText('Demo Lima')
+    expect(
+      screen.getByText('Usaremos tu nombre y celular solo para avisarte de tu turno.'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Tus datos se borran a los 30 días.')).toBeInTheDocument()
   })
 
   it('sin la casilla de consentimiento marcada no envia el formulario', async () => {
