@@ -64,7 +64,8 @@ Comensal (sin autenticacion):
 - `GET  /api/locations/{slug}`
 - `POST /api/locations/{slug}/entries` (requiere header `Idempotency-Key`, 8–100 caracteres)
 - `GET  /api/entries/{public_token}`
-- `POST /api/entries/{public_token}/on-my-way`
+- `POST /api/entries/{public_token}/on-my-way` (idempotente: un segundo toque
+  sobre una entrada `called` que ya tiene el evento no crea otro, responde 200)
 - `POST /api/entries/{public_token}/cancel`
 
 Tablet (`Authorization: Bearer <token>`, token entregado por `scripts/seed.py`):
@@ -82,7 +83,19 @@ Tablet (`Authorization: Bearer <token>`, token entregado por `scripts/seed.py`):
 - Todas las horas se guardan y devuelven en UTC (`...Z` en JSON). El `service_date` de cada local se
   calcula con su `timezone` y el corte `SERVICE_DAY_CUTOFF_HOUR`.
 - Los duplicados (mismo local + dia + telefono, con estado `waiting`/`called`) los controla un indice
-  unico parcial en SQLite, no la aplicacion.
+  unico parcial en SQLite, no la aplicacion. Lo mismo para "Voy en camino" (`on_my_way` en el payload
+  publico): un indice unico parcial en `entry_events(entry_id) WHERE type = 'on_my_way'` garantiza un
+  solo evento por entrada aunque lleguen dos toques simultaneos; si choca, se hace rollback del insert
+  y se responde 200 con el estado actual (nunca 500).
+- **`create_all()` no agrega indices nuevos a una `mesa.db` existente** (SQLAlchemy solo crea tablas que
+  faltan). Si tu base es de antes de este cambio, borra `mesa.db` y vuelve a correr `python -m
+  scripts.seed` para que el indice de `on_my_way` quede creado.
+- **Pendiente para MySQL (Cloud SQL, piloto)**: los dos indices parciales usan `sqlite_where`, que
+  SQLAlchemy ignora en otros dialectos. En MySQL quedarian como indices unicos completos: el de
+  duplicados bloquearia volver a la cola el mismo dia aunque el turno anterior ya este cerrado, y el de
+  `on_my_way` (unico sobre `entry_id`) haria fallar el segundo evento de cualquier entrada (`joined`
+  y luego `called`). En la migracion se reemplazan por columnas calculadas con indice unico, p. ej.
+  `IF(type = 'on_my_way', entry_id, NULL)` y `IF(status IN ('waiting','called'), phone_e164, NULL)`.
 - En este corte el rate limit es en memoria y la notificacion es falsa (solo se invoca al llamar y
   solo para telefonos de Peru y Chile). El piloto trae el rate limit compartido entre instancias,
   el outbox con su worker y el SMS real (nota tecnica, secciones 2 y 7).

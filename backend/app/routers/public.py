@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app import clock, ratelimit, transitions
 from app.config import get_settings
 from app.db import get_db
-from app.models import Location, QueueEntry
+from app.models import EntryEvent, Location, QueueEntry
 from app.phones import sms_supported
 from app.queue import position_and_wait
 from app.schemas import EntryPublic, JoinEntryRequest, LocationPublic
@@ -23,6 +23,14 @@ router = APIRouter(prefix="/api", tags=["public"])
 
 def entry_public_payload(db: Session, entry: QueueEntry, location: Location) -> dict:
     ahead, position, wait_min = position_and_wait(db, entry, location.minutes_per_party)
+    # "Voy en camino" es un evento, no un estado (nota tecnica seccion 3): se
+    # deriva de si existe el evento, no de un campo en queue_entries.
+    on_my_way = (
+        db.query(EntryEvent.id)
+        .filter(EntryEvent.entry_id == entry.id, EntryEvent.type == "on_my_way")
+        .first()
+        is not None
+    )
     return {
         "public_token": entry.public_token,
         "status": entry.status,
@@ -35,6 +43,7 @@ def entry_public_payload(db: Session, entry: QueueEntry, location: Location) -> 
         "wait_min": wait_min,
         "sms_supported": sms_supported(entry.phone_e164),
         "joined_at": clock.to_iso_z(entry.joined_at),
+        "on_my_way": on_my_way,
     }
 
 

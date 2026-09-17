@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy import update as sa_update
+from sqlalchemy.exc import IntegrityError
 
 import app.transitions as transitions_module
+from app import clock
 from app.db import get_session_factory
 from app.main import app
-from app.models import QueueEntry
+from app.models import EntryEvent, QueueEntry
 from app.notifier import get_notifier
 from tests.conftest import (
     all_events,
@@ -150,6 +152,80 @@ def test_on_my_way_valid_in_called_and_visible_on_tablet(env):
     queue = env.client.get("/api/tablet/queue", headers=auth_headers(env.token_lima_a)).json()
     item = next(e for e in queue["entries"] if e["id"] == moved["entry_id"])
     assert item["on_my_way"] is True
+
+
+def test_get_entry_reflects_on_my_way_flag(env):
+    moved = move_to_status(env.client, env.lima_slug, env.token_lima_a, "called")
+
+    resp = env.client.get(f"/api/entries/{moved['public_token']}")
+    assert resp.status_code == 200
+    assert resp.json()["on_my_way"] is False
+
+    resp = env.client.post(f"/api/entries/{moved['public_token']}/on-my-way")
+    assert resp.status_code == 200
+    assert resp.json()["on_my_way"] is True
+
+    resp = env.client.get(f"/api/entries/{moved['public_token']}")
+    assert resp.status_code == 200
+    assert resp.json()["on_my_way"] is True
+
+
+def test_on_my_way_second_touch_is_idempotent(env):
+    """Segundo toque sobre `called`: no crea otro evento, responde 200."""
+    moved = move_to_status(env.client, env.lima_slug, env.token_lima_a, "called")
+
+    r1 = env.client.post(f"/api/entries/{moved['public_token']}/on-my-way")
+    assert r1.status_code == 200
+    r2 = env.client.post(f"/api/entries/{moved['public_token']}/on-my-way")
+    assert r2.status_code == 200
+    assert r2.json()["on_my_way"] is True
+
+    on_my_way_events = [e for e in all_events(moved["entry_id"]) if e.type == "on_my_way"]
+    assert len(on_my_way_events) == 1
+
+
+def test_on_my_way_still_409_outside_called_even_with_existing_event(env):
+    """Fuera de `called` sigue dando 409, aunque ya tuviera el evento."""
+    moved = move_to_status(env.client, env.lima_slug, env.token_lima_a, "called")
+    assert env.client.post(f"/api/entries/{moved['public_token']}/on-my-way").status_code == 200
+
+    seat_resp = env.client.post(
+        f"/api/tablet/entries/{moved['entry_id']}/seat", headers=auth_headers(env.token_lima_a)
+    )
+    assert seat_resp.status_code == 200
+
+    resp = env.client.post(f"/api/entries/{moved['public_token']}/on-my-way")
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["current_status"] == "seated"
+
+
+def test_on_my_way_unique_index_rejects_second_event_inserted_directly(env):
+    """Garantia de base: el indice unico parcial rechaza un segundo evento
+    on_my_way de la misma entrada, aunque se lo inserte directo (sin pasar
+    por apply_on_my_way)."""
+    moved = move_to_status(env.client, env.lima_slug, env.token_lima_a, "called")
+    resp = env.client.post(f"/api/entries/{moved['public_token']}/on-my-way")
+    assert resp.status_code == 200
+
+    db = get_session_factory()()
+    try:
+        db.add(
+            EntryEvent(
+                entry_id=moved["entry_id"],
+                location_id=env.lima_id,
+                type="on_my_way",
+                from_status="called",
+                to_status="called",
+                actor="customer",
+                device_id=None,
+                created_at=clock.now_utc(),
+            )
+        )
+        with pytest.raises(IntegrityError):
+            db.commit()
+    finally:
+        db.rollback()
+        db.close()
 
 
 # --- Caso 14 ---------------------------------------------------------------

@@ -5,6 +5,7 @@ from typing import NamedTuple
 
 from fastapi import HTTPException
 from sqlalchemy import update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import clock
@@ -166,16 +167,60 @@ def _record_event_if_status(
 
 
 def apply_on_my_way(db: Session, *, entry_id: int, location_id: int) -> QueueEntry:
-    """No cambia de estado; solo valido si status == called."""
-    return _record_event_if_status(
-        db,
-        entry_id=entry_id,
-        location_id=location_id,
-        allowed=("called",),
-        event_type="on_my_way",
-        actor="customer",
-        device_id=None,
+    """No cambia de estado; solo valido si status == called. Segundo toque
+    idempotente: lo garantiza el indice unico parcial en entry_events
+    (uq_entry_on_my_way, ver models.py), no una lectura previa en Python. Si
+    choca (segundo toque secuencial o dos toques simultaneos), no es un error:
+    se hace rollback del insert y se responde con el estado actual."""
+    entry = _get_entry_in_location(db, entry_id, location_id)
+    if entry is None:
+        raise TransitionError("not_found", 404)
+
+    status = entry.status
+
+    # Mismo update condicional que el resto de transiciones: si la tablet
+    # sienta entre la lectura y el UPDATE, la carrera con "Sentar" sigue
+    # dando 409 sin evento.
+    result = db.execute(
+        update(QueueEntry)
+        .where(
+            QueueEntry.id == entry_id,
+            QueueEntry.location_id == location_id,
+            QueueEntry.status == "called",
+            QueueEntry.status == status,
+        )
+        .values(status=QueueEntry.status)
     )
+
+    if result.rowcount != 1:
+        db.rollback()
+        current = _get_entry_in_location(db, entry_id, location_id)
+        current_status = current.status if current is not None else status
+        raise TransitionError("invalid_transition", 409, current_status=current_status)
+
+    db.add(
+        EntryEvent(
+            entry_id=entry_id,
+            location_id=location_id,
+            type="on_my_way",
+            from_status=status,
+            to_status=status,
+            actor="customer",
+            device_id=None,
+            created_at=clock.now_utc(),
+        )
+    )
+    try:
+        db.commit()
+    except IntegrityError:
+        # Ya existia el evento (segundo toque, secuencial o simultaneo): el
+        # indice unico lo rechazo. Se descarta el insert y se responde 200
+        # igual, con el estado actual.
+        db.rollback()
+
+    entry = _get_entry_in_location(db, entry_id, location_id)
+    assert entry is not None
+    return entry
 
 
 def apply_link_recovered(

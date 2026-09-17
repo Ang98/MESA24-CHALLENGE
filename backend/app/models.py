@@ -92,3 +92,15 @@ class EntryEvent(Base):
     actor: Mapped[str] = mapped_column(String, nullable=False)
     device_id: Mapped[int | None] = mapped_column(ForeignKey("devices.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        # "Voy en camino" es un evento, no un estado (nota tecnica seccion 3):
+        # un solo evento on_my_way por entrada, igual que uq_active_entry, lo
+        # garantiza la base, no la aplicacion.
+        Index(
+            "uq_entry_on_my_way",
+            "entry_id",
+            unique=True,
+            sqlite_where=text("type = 'on_my_way'"),
+        ),
+    )

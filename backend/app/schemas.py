@@ -53,6 +53,7 @@ class EntryPublic(BaseModel):
     wait_min: list[int] | None
     sms_supported: bool
     joined_at: str
+    on_my_way: bool
 
 
 class TabletQueueItem(BaseModel):
